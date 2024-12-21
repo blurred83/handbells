@@ -456,7 +456,7 @@
         const spacing = getLineSpacing();
         for (let i = 1; i <= NUM_BELLS; i++) {
           const lineX = spacing * i;
-          ctx.strokeStyle = bellColors[i - 1]; 
+          ctx.strokeStyle = bellColors[i - 1] === "white" ? "black" : bellColors[i - 1]; 
           ctx.beginPath();
           ctx.moveTo(lineX, 0);
           ctx.lineTo(lineX, canvas.height);
