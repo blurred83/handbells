@@ -423,7 +423,7 @@
       }
 
       function update(deltaTime) {
-        horizontalLineY = canvas.height * 0.75;
+        horizontalLineY = canvas.height * 0.6;
 
         // Spawn notes
         for (let n of activeNotes) {
@@ -465,8 +465,8 @@
         }
 
         // Horizontal line
-        ctx.strokeStyle = "black";
-        ctx.lineWidth = 3;
+        ctx.strokeStyle = "maroon";
+        ctx.lineWidth = 5;
         ctx.beginPath();
         ctx.moveTo(0, horizontalLineY);
         ctx.lineTo(canvas.width, horizontalLineY);
