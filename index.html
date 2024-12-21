@@ -478,13 +478,13 @@ for (let bell = 1; bell <= NUM_BELLS; bell++) {
   if (usedBells.has(bell)) {
     // 5px line, full opacity
     ctx.strokeStyle = color;
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 50;
     ctx.globalAlpha = 1.0;
   } else {
     // 2px line, 50% opacity
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 20;
+    ctx.globalAlpha = 0.1;
   }
 
   ctx.beginPath();
