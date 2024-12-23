@@ -548,8 +548,8 @@
         "white",
       ];
 
-      // We'll draw the horizontal line at 60% from top
-      let horizontalLineY = canvas.height * 0.6;
+      // We'll draw the horizontal line at 70% from top
+      let horizontalLineY = canvas.height * 0.7;
       const NUM_BELLS = 8;
 
       // We only want to draw the lines for bells that appear in the currentSong
@@ -634,7 +634,7 @@
       }
 
       function update(deltaTime) {
-        horizontalLineY = canvas.height * 0.6;
+        horizontalLineY = canvas.height * 0.7;
 
         // Spawn notes
         for (let n of activeNotes) {
@@ -645,12 +645,14 @@
             n.y = -20;
           }
         }
+		
+		const bpm = getCurrentBPM();
 
         // Move notes
         for (let n of activeNotes) {
           if (n.hasSpawned) {
             // Fall speed in px/second
-            n.y += 100 * deltaTime;
+            n.y += (bpm * 1.5) * deltaTime;
 
             if (!n.rung && n.y >= horizontalLineY) {
               console.log(`Bell ${n.note} rung at t=${songTime.toFixed(2)}s`);
