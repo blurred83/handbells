@@ -399,3 +399,4 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 /.github/workflows/azure-static-web-apps-white-desert-0f0117d10.yml
+/Songs.xlsx
