@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Handbell Web App</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: #ffffff;
+        font-family: sans-serif;
+      }
+
+      #controls {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 999;
+        background: rgba(255, 255, 255, 0.8);
+        padding: 10px;
+        border-radius: 5px;
+      }
+
+      #controls label {
+        display: inline-block;
+        margin-right: 8px;
+      }
+
+      #controls select,
+      #controls button {
+        margin-right: 8px;
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+
+      input[type="range"] {
+        width: 120px;
+        vertical-align: middle;
+      }
+    </style>
+	
+	<script src="Scripts/songs.js"></script>
+  </head>
+  <body>
+    <div id="controls">
+      <label for="songSelect">Song:</label>
+      <select id="songSelect"></select>
+
+      <label for="bpmSlider">BPM:</label>
+      <input
+        type="range"
+        id="bpmSlider"
+        min="40"
+        max="200"
+        step="1"
+        value="90"
+      />
+      <span id="bpmValue">90</span>
+
+      <button id="startBtn">Start</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="stopBtn">Stop</button>
+	  
+	  <!-- Sound toggle checkbox -->
+      <label for="soundToggle">Play Sound</label>
+      <input type="checkbox" id="soundToggle" />
+    </div>
+
+    <canvas id="handbellCanvas"></canvas>
+
+    <script>
+      /////////////////////////////////
+      // 1) SONG DATA
+      /////////////////////////////////
+      const songs = getSongs();
+
+      /////////////////////////////////
+      // 2) UI HOOKUP
+      /////////////////////////////////
+      const songSelect = document.getElementById("songSelect");
+      const bpmSlider = document.getElementById("bpmSlider");
+      const bpmValue = document.getElementById("bpmValue");
+      const startBtn = document.getElementById("startBtn");
+      const pauseBtn = document.getElementById("pauseBtn");
+      const stopBtn = document.getElementById("stopBtn");
+	  
+	  // Sound toggle
+      const soundToggle = document.getElementById("soundToggle");
+      let soundEnabled = false; // Off by default
+
+      // Populate the song dropdown
+      songs.forEach((s, index) => {
+        const opt = document.createElement("option");
+        opt.value = index;
+        opt.textContent = s.title;
+        songSelect.appendChild(opt);
+      });
+      songSelect.value = 0; // Default: Jingle Bells
+
+      // Canvas + 2D context
+      const canvas = document.getElementById("handbellCanvas");
+      const ctx = canvas.getContext("2d");
+
+      function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+
+      // Update BPM label
+      function updateBPMLabel(value) {
+        bpmValue.textContent = value;
+      }
+      updateBPMLabel(bpmSlider.value);
+
+      /////////////////////////////////
+      // 3) GLOBALS FOR ANIMATION
+      /////////////////////////////////
+      let currentSongIndex = 0;
+      let currentSong = songs[0];
+
+      let isRunning = false;
+      let songTime = 0; // seconds
+      let lastFrameTime = null;
+
+      // Each note => { note, spawnTime, hasSpawned, x, y, rung }
+      let activeNotes = [];
+
+      // Bell colors (1–8 => indices 0–7)
+      const bellColors = [
+        "red",
+        "orange",
+        "yellow",
+        "green",
+        "lightblue",
+        "darkblue",
+        "purple",
+        "white",
+      ];
+	  
+	  // =========================
+      // WEB AUDIO API INTEGRATION
+      // =========================
+
+      // 1) Create an AudioContext for everything
+      const audioContext = new AudioContext();
+
+      // 2) Preload and decode the sound files for bells 1..8
+      // We'll store the decoded AudioBuffers in an array (index=bell-1)
+      const soundFiles = [
+        "Sounds/Note41.mp3", // bell 1
+        "Sounds/Note42.mp3", // bell 2
+        "Sounds/Note43.mp3", // bell 3
+        "Sounds/Note44.mp3", // bell 4
+        "Sounds/Note45.mp3", // bell 5
+        "Sounds/Note46.mp3", // bell 6
+        "Sounds/Note47.mp3", // bell 7
+        "Sounds/Note48.mp3", // bell 8
+      ];
+      let bellBuffers = new Array(8).fill(null);
+
+      async function loadAndDecodeSound(url) {
+        const response = await fetch(url);
+        const arrayBuffer = await response.arrayBuffer();
+        return audioContext.decodeAudioData(arrayBuffer);
+      }
+
+      async function preloadAllSounds() {
+        // load each file, decode, store in bellBuffers
+        const promises = soundFiles.map((file, idx) => {
+          return loadAndDecodeSound(file).then((decoded) => {
+            bellBuffers[idx] = decoded;
+          });
+        });
+
+        return Promise.all(promises); // wait until all loaded
+      }
+
+      // 3) Utility to play a given bell's sound
+      //    (only if soundEnabled, and if buffer is loaded)
+      function playBell(bellIndex) {
+        if (!soundEnabled) return; // toggled off
+        if (!bellBuffers[bellIndex]) return; // not loaded yet?
+
+        // Some browsers require audioContext to be resumed after a user gesture
+        // We'll also do that in startSong() to be safe
+
+        const source = audioContext.createBufferSource();
+        source.buffer = bellBuffers[bellIndex];
+        source.connect(audioContext.destination);
+
+        // Start immediately
+        source.start(0);
+      }
+
+      // We'll draw the horizontal line at 70% from top
+      let horizontalLineY = canvas.height * 0.7;
+      const NUM_BELLS = 8;
+
+      // We only want to draw the lines for bells that appear in the currentSong
+      // We'll determine that set each time we load a new song or recalc.
+      let usedBells = new Set();
+
+      function getLineSpacing() {
+        return canvas.width / (NUM_BELLS + 1);
+      }
+
+      /////////////////////////////////
+      // 4) SONG/BPM LOGIC
+      /////////////////////////////////
+      function getCurrentBPM() {
+        return parseInt(bpmSlider.value, 10);
+      }
+
+      function calculateNoteTimes() {
+        const bpm = getCurrentBPM();
+        const secPer16th = (60 / bpm) / 4;
+
+        // Collect all used bells
+        usedBells = new Set(currentSong.notes.map((n) => n.note));
+
+        // Build array of note objects
+        activeNotes = currentSong.notes.map((n) => {
+          const spawnTime = n.position * secPer16th;
+          return {
+            note: n.note,
+            spawnTime,
+            hasSpawned: false,
+            x: 0,
+            y: 0,
+            rung: false,
+          };
+        });
+      }
+
+      function handleBPMChange() {
+        const oldSongTime = songTime;
+        calculateNoteTimes();
+        // Keep the same "songTime" so existing notes spawn or skip as needed
+        songTime = oldSongTime;
+      }
+
+      bpmSlider.addEventListener("input", () => {
+        updateBPMLabel(bpmSlider.value);
+        if (isRunning) {
+          handleBPMChange();
+        } else {
+          calculateNoteTimes();
+          draw();
+        }
+      });
+
+      songSelect.addEventListener("change", () => {
+        stopSong();
+        currentSongIndex = parseInt(songSelect.value, 10);
+        currentSong = songs[currentSongIndex];
+        bpmSlider.value = currentSong.defaultBPM;
+        updateBPMLabel(bpmSlider.value);
+        calculateNoteTimes();
+        draw();
+      });
+	  
+	  // Sound toggle logic
+      soundToggle.addEventListener("change", () => {
+        soundEnabled = soundToggle.checked;
+      });
+
+      /////////////////////////////////
+      // 5) ANIMATION LOOP
+      /////////////////////////////////
+      function animate(timestamp) {
+        if (!isRunning) return;
+        if (lastFrameTime === null) {
+          lastFrameTime = timestamp;
+        }
+        const deltaTime = (timestamp - lastFrameTime) / 1000;
+        lastFrameTime = timestamp;
+        songTime += deltaTime;
+
+        update(deltaTime);
+        draw();
+
+        requestAnimationFrame(animate);
+      }
+
+      function update(deltaTime) {
+		horizontalLineY = canvas.height * 0.7;
+
+		// Spawn notes
+		for (let n of activeNotes) {
+		if (!n.hasSpawned && songTime >= n.spawnTime) {
+		  n.hasSpawned = true;
+		  const bellIndex = n.note - 1;
+		  n.x = getLineSpacing() * (bellIndex + 1);
+		  n.y = -20;
+		}
+		}
+
+		const bpm = getCurrentBPM();
+
+		// Move notes
+		for (let n of activeNotes) {
+		if (n.hasSpawned) {
+		  n.y += bpm * 1.5 * deltaTime;
+
+		  // RING!
+		  if (!n.rung && n.y >= horizontalLineY) {
+			n.rung = true;
+			playBell(n.note - 1); // *** CALL THIS! ***
+		  }
+		}
+		}
+	  }
+
+
+      /////////////////////////////////
+      // 6) DRAWING
+      /////////////////////////////////
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw only lines for bells actually used in the song
+        ctx.lineWidth = 3;
+        const spacing = getLineSpacing();
+
+for (let bell = 1; bell <= NUM_BELLS; bell++) {
+  const lineX = spacing * bell;
+
+  // If the color is "white", we use black instead so it's visible
+  let color = bellColors[bell - 1];
+  if (color === "white") {
+    color = "black";
+  }
+
+  // Check if the current bell is used in the song
+  if (usedBells.has(bell)) {
+    // 5px line, full opacity
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 20;
+    ctx.globalAlpha = 1.0;
+  } else {
+    // 2px line, 50% opacity
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 20;
+    ctx.globalAlpha = 0.05;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(lineX, 0);
+  ctx.lineTo(lineX, canvas.height);
+  ctx.stroke();
+
+  // Reset globalAlpha to avoid affecting subsequent drawing
+  ctx.globalAlpha = 1.0;
+}
+
+
+        // Horizontal line
+        ctx.strokeStyle = "maroon";
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(0, horizontalLineY);
+        ctx.lineTo(canvas.width, horizontalLineY);
+        ctx.stroke();
+
+        // Draw notes (only for used bells anyway)
+        for (let n of activeNotes) {
+          if (n.hasSpawned) {
+            const color = bellColors[n.note - 1];
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, 20, 0, 2 * Math.PI);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "black";
+            ctx.stroke();
+            ctx.fillStyle = color;
+            ctx.fill();
+          }
+        }
+      }
+
+      /////////////////////////////////
+      // 7) CONTROL BUTTONS
+      /////////////////////////////////
+      startBtn.addEventListener("click", startSong);
+      pauseBtn.addEventListener("click", pauseSong);
+      stopBtn.addEventListener("click", stopSong);
+
+      function startSong() {
+        if (!isRunning) {
+          isRunning = true;
+          lastFrameTime = null;
+          requestAnimationFrame(animate);
+        }
+      }
+
+      function pauseSong() {
+        isRunning = false;
+      }
+
+      function stopSong() {
+        isRunning = false;
+        songTime = 0;
+        lastFrameTime = null;
+        calculateNoteTimes(); // re-collect usedBells, reset spawn
+        draw();
+      }
+
+      /////////////////////////////////
+      // 8) INIT (Default Song)
+      /////////////////////////////////
+      currentSong = songs[0];
+      bpmSlider.value = currentSong.defaultBPM;
+      updateBPMLabel(bpmSlider.value);
+
+      // PRELOAD SOUNDS FIRST, THEN CALCULATE NOTES
+      // This ensures we have everything loaded before user starts playing
+      preloadAllSounds()
+        .then(() => {
+          // console.log("All sounds loaded & decoded!");
+          calculateNoteTimes();
+          draw();
+        })
+        .catch((e) => {
+          console.error("Error loading sounds:", e);
+          // Even if sounds fail, we can still run the visuals
+          calculateNoteTimes();
+          draw();
+        });
+    </script>
+  </body>
+</html>
